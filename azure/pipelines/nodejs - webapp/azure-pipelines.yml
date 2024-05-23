@@ -1,0 +1,111 @@
+trigger:
+  branches:
+    include:
+      - develop
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Default configurations backend
+  - name: Approvers
+    value: Aprovadores-TeamSRE
+
+  # Change AZ_SERVICE_CREDENTIAL and ENV according to the deploy environment
+  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/develop') }}:
+      - name: ENV
+        value: HML
+      - name: AZ_SUBSCRIPTION
+        value: azure-pipeline-ingresso-hml # Jornada-Ingresso-HML
+      - name: AZ_RG
+        value: rg-vitrine-strapi
+      - name: AZ_WEBAPP_NAME
+        value: cogna-qualidade-venda-front-hml
+
+  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+      - name: ENV
+        value: PRD
+      - name: AZ_SUBSCRIPTION
+        value: azure-pipeline-ingresso-prd # Jornada-Ingresso-PRD
+      - name: AZ_RG
+        value: rg-vitrine-strapi
+      - name: AZ_WEBAPP_NAME
+        value: cogna-qualidade-venda-front-prd
+
+stages:
+  - stage: APP_BUILD
+    displayName: BUID - ${{ variables.ENV }}
+    jobs:
+      - job: BUILD
+        displayName: BUILDING
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node version 20.5.0'
+            inputs:
+                versionSpec: 20.5.0
+
+          - task: Npm@1
+            displayName: 'Install Application Dependencies'
+            inputs:
+                workingDir: '$(System.DefaultWorkingDirectory)'
+                verbose: false
+
+          - task: Npm@1
+            displayName: 'Remove extraneous packages'
+            inputs:
+                command: custom
+                workingDir: '$(System.DefaultWorkingDirectory)'
+                verbose: false
+                customCommand: 'prune --production'
+
+          - task: ArchiveFiles@2
+            displayName: 'Archive files'
+            inputs:
+                rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+                includeRootFolder: false
+
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Artifact"
+            inputs:
+                PathtoPublish: "$(build.ArtifactStagingDirectory)"
+                artifactName: "qualidade-vendas-front"
+
+  - stage: APP_DEPLOY
+    displayName: DEPLOYMENT - ${{ variables.ENV }}
+    dependsOn: APP_BUILD
+    jobs:
+      - deployment:
+        displayName: DEPLOYMENT - ${{ variables.ENV }}
+        environment: $(Approvers)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - script: |
+                    ls -la
+                  displayName: check files  
+
+                - task: Bash@3
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      # Write your commands here
+                      
+                      ls -la $(Agent.BuildDirectory)
+
+                - task: AzureRmWebAppDeployment@4
+                  displayName: "publish"
+                  inputs:
+                    ConnectionType: "AzureRM"
+                    azureSubscription: ${{ variables.AZ_SUBSCRIPTION }}
+                    appType: "webAppLinux"
+                    WebAppName: ${{ variables.AZ_WEBAPP_NAME }}
+                    deployToSlotOrASE: true
+                    ResourceGroupName: ${{ variables.AZ_RG }}
+                    SlotName: "production"
+                    packageForLinux: "$(Agent.BuildDirectory)/qualidade-vendas-front/*.zip"
+                    RuntimeStack: "NODE|18-lts"
+                    StartupCommand: "npm install && npm start"

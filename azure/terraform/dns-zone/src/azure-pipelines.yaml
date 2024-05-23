@@ -1,0 +1,161 @@
+trigger:
+  branches:
+    include:
+      - develop
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+resources:
+  repositories:
+    - repository: modules-terraform
+      type: git
+      name: "SRE/modules-terraform"
+      ref: refs/heads/main
+
+variables:
+  # Variable Group
+  - group: remote-module
+
+  # Default configurations backend
+  - name: Approvers
+    value: Aprovadores-TeamSRE
+  - name: BACKEND_PATH_CADERN
+    value: adminitrativo-lp-cadern/infra/terraform.tfstate
+  - name: WORK_DIR_CADERN
+    value: $(System.DefaultWorkingDirectory)/src
+
+  # Change AZ_SERVICE_CREDENTIAL and ENV according to the deploy environment
+  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/develop') }}:
+      - name: ENV
+        value: HML
+      - name: AZ_SERVICE_CREDENTIAL
+        value: azure-pipeline-ingresso-hml
+
+  - ${{ if startsWith(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+      - name: ENV
+        value: PRD
+      - name: AZ_SERVICE_CREDENTIAL
+        value: azure-pipeline-ingresso-prd
+
+stages:
+  - stage: CADERN_CHECK
+    displayName: CHECK CADERN - ${{ variables.ENV }}
+    jobs:
+      - job: PLAN
+        displayName: check run
+        steps:
+          - task: InstallSSHKey@0
+            displayName: config module
+            inputs:
+              knownHostsEntry: "$(known_host)"
+              sshKeySecureFile: "id_rsa"
+
+          - task: InfracostSetup@1
+            displayName: infracost install
+            inputs:
+              apiKey: "$(infracost_apikey)"
+              version: "0.10.x"
+              currency: "BRL"
+
+          - task: TerraformCLI@1
+            displayName: terraform init
+            inputs:
+              command: "init"
+              workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+              backendType: "azurerm"
+              backendServiceArm: "Kroton-Devops-PRD(719669e1-2bfe-4a0f-b926-1a3a8cf4925e)"
+              backendAzureRmSubscriptionId: "719669e1-2bfe-4a0f-b926-1a3a8cf4925e"
+              ensureBackend: true
+              backendAzureRmResourceGroupName: "terraform-resources"
+              backendAzureRmResourceGroupLocation: "eastus"
+              backendAzureRmStorageAccountName: "krtdevopsterraformprd"
+              backendAzureRmContainerName: "tfstate"
+              backendAzureRmKey: ${{ variables.BACKEND_PATH_CADERN }}
+              allowTelemetryCollection: true
+
+          - task: TerraformCLI@1
+            displayName: workspace selected ${{ variables.ENV }}
+            inputs:
+              command: "workspace"
+              workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+              workspaceSubCommand: "select"
+              commandOptions: "-or-create=true"
+              workspaceName: ${{ variables.ENV }}
+              allowTelemetryCollection: true
+              skipExistingWorkspace: true
+
+          - task: TerraformCLI@1
+            displayName: terraform validate
+            inputs:
+              command: "validate"
+              workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+              allowTelemetryCollection: true
+
+          - task: TerraformCLI@1
+            displayName: terraform plan
+            inputs:
+              command: "plan"
+              workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+              environmentServiceName: $(AZ_SERVICE_CREDENTIAL)
+              allowTelemetryCollection: true
+
+          - task: Bash@3
+            displayName: infracost analyze
+            inputs:
+              targetType: "inline"
+              script: "cd src && infracost breakdown --path ${{ variables.WORK_DIR_CADERN }}"
+
+  - stage: APPLY
+    displayName: DEPLOYMENT CADERN - ${{ variables.ENV }}
+    dependsOn: CADERN_CHECK
+    jobs:
+      - deployment:
+        displayName: deploy
+        environment: $(Approvers)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: InstallSSHKey@0
+                  displayName: config module
+                  inputs:
+                    knownHostsEntry: "$(known_host)"
+                    sshKeySecureFile: "id_rsa"
+
+                - task: TerraformCLI@1
+                  displayName: terraform init
+                  inputs:
+                    command: "init"
+                    workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+                    backendType: "azurerm"
+                    backendServiceArm: "Kroton-Devops-PRD(719669e1-2bfe-4a0f-b926-1a3a8cf4925e)"
+                    backendAzureRmSubscriptionId: "719669e1-2bfe-4a0f-b926-1a3a8cf4925e"
+                    ensureBackend: true
+                    backendAzureRmResourceGroupName: "terraform-resources"
+                    backendAzureRmResourceGroupLocation: "eastus"
+                    backendAzureRmStorageAccountName: "krtdevopsterraformprd"
+                    backendAzureRmContainerName: "tfstate"
+                    backendAzureRmKey: ${{ variables.BACKEND_PATH_CADERN }}
+                    allowTelemetryCollection: true
+
+                - task: TerraformCLI@1
+                  displayName: workspace selected ${{ variables.ENV }}
+                  inputs:
+                    command: "workspace"
+                    workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+                    workspaceSubCommand: "select"
+                    commandOptions: "-or-create=true"
+                    workspaceName: ${{ variables.ENV }}
+                    allowTelemetryCollection: true
+                    skipExistingWorkspace: true
+
+                - task: TerraformCLI@1
+                  displayName: terraform apply
+                  inputs:
+                    command: "apply"
+                    workingDirectory: ${{ variables.WORK_DIR_CADERN }}
+                    environmentServiceName: $(AZ_SERVICE_CREDENTIAL)
+                    allowTelemetryCollection: true

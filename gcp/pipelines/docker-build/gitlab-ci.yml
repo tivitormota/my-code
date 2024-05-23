@@ -1,0 +1,116 @@
+image: node:16.14.2
+
+stages:
+  - test
+  - build
+  - deploy
+
+.testing:
+  stage: test
+  before_script:
+    - npm config set @equipe-ninja:registry https://gitlab.com/api/v4/packages/npm/
+    - npm config set '//gitlab.com/api/v4/packages/npm/:_authToken' "${SARAIVA_UI_DEPLOY_TOKEN}"
+    - npm install
+  tags:
+    - staging
+
+test:
+  extends: .testing
+  script:
+    - npm test
+
+.build-image:
+  image: ${GCLOUD_CONTAINER_IMAGE}
+  stage: build
+  before_script:
+    - echo ${GITLAB_CI_SERVICE_ACCOUNT} | base64 --decode -w 0 > /tmp/gitlab-ci-service-account.json
+    - echo -e "\n@equipe-ninja:registry=https://gitlab.com/api/v4/packages/npm/" >> npmrc
+    - echo "//gitlab.com/api/v4/packages/npm/:_authToken=${SARAIVA_UI_DEPLOY_TOKEN}" >> npmrc
+    - echo "//gitlab.com/api/v4/projects/:_authToken=${SARAIVA_UI_DEPLOY_TOKEN}" >> npmrc
+    - cat npmrc
+  script:
+    - gcloud auth activate-service-account --key-file /tmp/gitlab-ci-service-account.json
+    - rm -f .env* && gsutil cp -p gs://${ENV_CONFIG_BUCKET_NAME}/ava-lfg/.env.${ENVIRONMENT} .env
+    - gcloud builds submit -t ${IMAGE_NAME}:${CI_COMMIT_SHA}-${ENVIRONMENT} . --project "${GCP_PROJECT}" --timeout=20m
+    - gcloud container images add-tag ${IMAGE_NAME}:${CI_COMMIT_SHA}-${ENVIRONMENT} ${IMAGE_NAME}:${ENVIRONMENT} --project "${GCP_PROJECT}" --quiet
+
+build-develop:
+  extends: .build-image
+  variables:
+    ENVIRONMENT: develop
+    GCP_PROJECT: ${DEVELOP_GCP_PROJECT}
+    GITLAB_CI_SERVICE_ACCOUNT: ${DEVELOP_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    IMAGE_NAME: gcr.io/${DEVELOP_GCP_PROJECT}/sre/ava-lfg
+    ENV_CONFIG_BUCKET_NAME: develop-environment-config
+  only:
+    refs:
+      - develop
+  tags:
+    - develop
+
+build-staging:
+  extends: .build-image
+  variables:
+    ENVIRONMENT: staging
+    GCP_PROJECT: ${STAGING_GCP_PROJECT}
+    GITLAB_CI_SERVICE_ACCOUNT: ${STAGING_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    IMAGE_NAME: gcr.io/${STAGING_GCP_PROJECT}/sre/ava-lfg
+    ENV_CONFIG_BUCKET_NAME: staging-environment-config
+  only:
+    refs:
+      - staging
+  tags:
+    - staging
+
+build-production:
+  extends: .build-image
+  variables:
+    ENVIRONMENT: production
+    GCP_PROJECT: ${PRODUCTION_GCP_PROJECT}
+    GITLAB_CI_SERVICE_ACCOUNT: ${PRODUCTION_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    IMAGE_NAME: gcr.io/${PRODUCTION_GCP_PROJECT}/sre/ava-lfg
+    ENV_CONFIG_BUCKET_NAME: production-environment-config
+  only:
+    refs:
+      - main
+  tags:
+    - production
+
+.trigger-common:
+  stage: deploy
+  script:
+    - curl -X POST -F token=${INFRA_SETS_TRIGGER} -F ref=${REF} -F "variables[AVA_LFG_IMAGE_TAG]=${CI_COMMIT_SHA}-${ENVIRONMENT}" https://gitlab.com/api/v4/projects/15487083/trigger/pipeline
+
+infra-sets-trigger-develop:
+  extends: .trigger-common
+  variables:
+    REF: develop
+    ENVIRONMENT: develop
+  only:
+    refs:
+      - develop
+  tags:
+    - develop
+
+infra-sets-trigger-staging:
+  extends: .trigger-common
+  variables:
+    REF: staging
+    ENVIRONMENT: staging
+  only:
+    refs:
+      - staging
+  tags:
+    - staging
+
+
+infra-sets-trigger-production:
+  extends: .trigger-common
+  variables:
+    REF: master
+    ENVIRONMENT: production
+  only:
+    refs:
+      - main
+  tags:
+    - production

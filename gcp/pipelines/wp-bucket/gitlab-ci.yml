@@ -1,0 +1,58 @@
+stages:
+  - deploy
+
+.common:
+  image: ${GCLOUD_CONTAINER_IMAGE}
+  stage: deploy
+  before_script:
+    - echo ${GITLAB_CI_SERVICE_ACCOUNT} | base64 --decode -w 0 > /tmp/gitlab-ci-service-account.json
+    - gcloud auth activate-service-account --key-file /tmp/gitlab-ci-service-account.json
+    - echo -n ${WP_CONFIG} | base64 --decode -w 0 > wp-config.php
+    - head -n 20 wp-config.php
+    - sed -i 's/PASSWORD_REPLACEMENT/'"$DB_PASSWORD"'/g' wp-config.php
+    - sed -i 's/ENVIRONMENT/'"$ENVIRONMENT"'/g' deploy.sh
+  script:
+    - cat deploy.sh
+    - gsutil -m rsync -r -P ./wp-content gs://${ENVIRONMENT}-edocente-vm/v2/wp-content/
+    - gsutil -m cp -r ./wp-config.php gs://${ENVIRONMENT}-edocente-vm/v2/
+    - gsutil -m cp -r ./deploy.sh gs://${ENVIRONMENT}-edocente-vm/v2/
+
+develop-deploy:
+  extends: .common
+  variables:
+    ENVIRONMENT: develop
+    GITLAB_CI_SERVICE_ACCOUNT: ${DEVELOP_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    DB_PASSWORD: ${DEVELOP_PNLD_EDOCENTE_PASSWORD}
+    WP_CONFIG: ${DEVELOP_B64_WP_CONFIG}
+  only:
+    refs:
+      - develop
+  tags:
+    - develop
+
+
+staging-deploy:
+  extends: .common
+  variables:
+    ENVIRONMENT: staging
+    GITLAB_CI_SERVICE_ACCOUNT: ${STAGING_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    DB_PASSWORD: ${STAGING_PNLD_EDOCENTE_PASSWORD}
+    WP_CONFIG: ${STAGING_B64_WP_CONFIG}
+  only:
+    refs:
+      - staging
+  tags:
+    - staging
+
+production-deploy:
+  extends: .common
+  variables:
+    ENVIRONMENT: production
+    GITLAB_CI_SERVICE_ACCOUNT: ${PRODUCTION_B64_GITLAB_CI_SERVICE_ACCOUNT}
+    DB_PASSWORD: ${PRODUCTION_PNLD_EDOCENTE_PASSWORD}
+    WP_CONFIG: ${PRODUCTION_B64_WP_CONFIG}
+  only:
+    refs:
+      - main
+  tags:
+    - production

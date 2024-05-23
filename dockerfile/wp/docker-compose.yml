@@ -1,0 +1,47 @@
+version: '3.3'
+
+services:
+   krt_mysql:
+     image: mysql:5.7
+     container_name: krt_mysql
+     volumes:
+       - db_data:/var/lib/mysql
+     restart: always
+     environment:
+       MYSQL_DATABASE: edocente
+       MYSQL_ROOT_PASSWORD: colegios123
+       MYSQL_USER: wordpress
+       MYSQL_PASSWORD: colegios123
+     ports:
+      - "8765:3306"
+     expose:
+      - '3310'
+     networks:
+      - kroton_net
+
+   krt_wp:
+     depends_on:
+      - krt_mysql
+     build: .
+     container_name: krt_wp
+     hostname: krt_wp
+     ports:
+      - "80:80"
+      - "444:443"
+     networks:
+      - kroton_net
+     restart: always
+     volumes:
+      - ./uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
+      #- /var/www/somos/colegios:/var/www/html
+      - .:/var/www/html/wp-content
+     environment:
+       WORDPRESS_DB_HOST: krt_mysql:3306
+       WORDPRESS_DB_NAME: edocente
+       WORDPRESS_DB_USER: root
+       WORDPRESS_DB_PASSWORD: colegios123
+       
+networks:
+  kroton_net:
+volumes:
+    db_data: {}

@@ -1,0 +1,82 @@
+# Starter pipeline
+
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- develop
+- stage
+- main
+
+resources:
+  repositories:
+    - repository: sonar-template
+      type: git
+      name: "Backbone Educacional/sonar-template"
+      ref: refs/heads/main
+      parameters:
+        DEPLOYMENTPATH: $(Publish_Artifact_Path)
+        SONAR_PROJECTKEY: kdop_backbone_helpers_sas_producer
+        SONAR_PROJECTNAME: kdop_backbone_helpers_sas_producer
+        JOB_NAME: BuildJob
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+
+- stage: BuildPublish
+  displayName: Build
+
+  jobs:
+
+  - template: sonar.yaml@sonar-template
+    parameters:
+      SONAR_PROJECTKEY: kdop_backbone_helpers_sas_producer
+      SONAR_PROJECTNAME: kdop_backbone_helpers_sas_producer
+
+  - job: BuildPublish
+
+    steps:
+
+
+    - task: Docker@2
+      displayName: 'Build an image DEV'
+      inputs:
+        containerRegistry: backboneACRDEV
+        repository: '$(Build.Repository.Name)'
+        tags: |
+          $(Build.BuildId)
+          latest
+      condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'develop'))
+
+    - task: Docker@2
+      displayName: 'Build an image STG'
+      inputs:
+        containerRegistry: backboneACRHML
+        repository: '$(Build.Repository.Name)'
+        tags: |
+          $(Build.BuildId)
+          latest
+      condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'stage'))
+
+    - task: Docker@2
+      displayName: 'Build an image PRD'
+      inputs:
+        containerRegistry: cgnbackboneacr
+        repository: '$(Build.Repository.Name)'
+        tags: |
+          $(Build.BuildId)
+          latest
+      condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'main'))
+
+    - task: CopyFiles@2
+      displayName: 'Copy Files Helm'
+      inputs:
+        SourceFolder: '$(Build.SourcesDirectory)'
+        Contents: 'helm/**'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+              
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'

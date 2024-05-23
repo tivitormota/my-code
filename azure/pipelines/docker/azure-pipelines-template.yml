@@ -1,0 +1,162 @@
+# Docker
+# Build and push an image to Azure Container Registry
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  autoCancel: true
+  branches:
+    include:
+      - main
+      - develop
+  drafts: false
+
+resources:
+ repositories:
+   - repository: templates
+     type: git
+     name: "System Team - Infraestrutura/kroton-devops-pipeline-templates"
+     ref: refs/heads/master
+
+pool: 
+ vmImage: ubuntu-latest
+
+variables:
+  # Container registry service connection established during pipeline creation
+  - name: DOCKERREGISTRYSERVICECONNECTION
+    value: kdopacr
+
+  - name: IMAGEREPOSITORYFUNCTIONS
+    value: functions
+
+  - name: CONTAINERREGISTRY
+    value: kdopacr.azurecr.io
+    
+  - name: TAG
+    value: $(Build.BuildId)
+
+  - name: IMAGE_URI_WEBAPP
+    value: $(CONTAINERREGISTRY)/$(NAMESPACE)/$(IMAGEREPOSITORYFUNCTIONS)
+
+  - name: IMAGE_TAG
+    value: $(TAG)
+    
+  - name: CHARTPATH_FUNCTIONS
+    value: drop/functions
+
+  - name: PUBLISH_ARTIFACT_PATH_WEBAPP
+    value: $(Build.SourcesDirectory)/src/DiplomaDigital.IaC/helm/app
+
+  - name: PROJECT_PATH
+    value: $(Build.SourcesDirectory)
+
+  - name: DOCKERFILE_PATH_WEBAPP
+    value: $(Build.SourcesDirectory)/Dockerfile
+
+  - name: BuildConfiguration
+    value: Release
+
+  - name: VM_IMAGE_NAME
+    value: 'ubuntu-latest'
+
+######################################################## 
+#            -- VARIABLES GROUPS GLOBAL --             #
+######################################################## 
+  - ${{ if or(startsWith(variables['Build.SourceBranch'], 'refs/heads/main'), startsWith(variables['Build.SourceBranch'], 'refs/heads/hotfix')) }}:
+    - group: CGN_ADM_DIPLOMA_DIGITAL_DEV
+    - name: ENV
+      value: PRD
+
+    - name: Approvers
+      value: Aprovadores-MecDelivery
+
+    - name: application
+      value: adm-diploma
+
+    - name: container_repo
+      value: $(project)/$(application)
+
+    - name: NAMESPACE
+      value: adm
+
+    - name: NAME_FUNCTION
+      value: cgn-diplomadigital-sender
+
+    - name: RELEASE_NAME_FUNCTIONS
+      value: cgn-diplomadigital-sender
+
+    - name: KUBERNETES_SERVICE_CONNECTION
+      value: kcluster-adm-prd-az
+
+
+  - ${{ if or(startsWith(variables['Build.SourceBranch'], 'refs/heads/develop'), startsWith(variables['Build.SourceBranch'], 'refs/heads/MecDelivery'))}}:
+    - group: CGN_ADM_DIPLOMA_DIGITAL_DEV
+    - name: ENV
+      value: NONPROD
+
+    - name: Approvers
+      value: Aprovadores-MecDelivery
+    
+    - name: application
+      value: adm-diploma
+
+    - name: container_repo
+      value: $(project)/$(application)
+      
+    - name: NAMESPACE
+      value: adm
+
+    - name: NAME_FUNCTION
+      value: cgn-diplomadigital-sender
+
+    - name: RELEASE_NAME_FUNCTIONS
+      value: cgn-diplomadigital-sender
+
+    - name: KUBERNETES_SERVICE_CONNECTION
+      value: kcluster-stg-az
+
+stages:
+  - stage: Build
+    displayName: Build
+    jobs:
+      - job: build_stg
+        displayName: "Build gradlew NonProd"
+        steps:
+
+          - template: docker/build-push.yml@templates
+            parameters: 
+              IMAGE_NAME: $(IMAGEREPOSITORYFUNCTIONS)
+              IMAGE_TAG: $(Build.BuildId)
+              DOCKERFILE_PATH: $(DOCKERFILE_PATH_WEBAPP)
+              NAMESPACE: $(NAMESPACE)
+
+          - template: artifact/publish.yml@templates
+            parameters:
+              DEPLOYMENTPATH: $(PUBLISH_ARTIFACT_PATH_WEBAPP)
+              ARTIFACT_NAME: $(CHARTPATH_FUNCTIONS)
+
+
+  - stage: Deploy
+    displayName: Deploy
+    dependsOn: Build
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - deployment:
+        displayName: Functions - ${{ variables.ENV }}
+        environment: $(Approvers)
+        strategy:
+          runOnce:
+            deploy:
+              steps: 
+              - template: helm/helm-install.yml@templates
+              - template: helm/helm-replace-token.yml@templates
+              - template: helm/helm-upgrade.yml@templates
+                parameters:
+                  KUBERNETES_SERVICE_CONNECTION: ${{ variables.KUBERNETES_SERVICE_CONNECTION }}
+                  NAMESPACE: $(NAMESPACE)
+                  RELEASE_NAME: $(RELEASE_NAME_FUNCTIONS)
+                  CHARTPATH: $(CHARTPATH_FUNCTIONS)
